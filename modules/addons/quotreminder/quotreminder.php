@@ -1,13 +1,12 @@
 <?php
 /**
- * Quote Reminder para WHMCS
+ * WHMCS Quote Reminder Addon
  * Desarrollado por Digital Media Group - https://digitalmediagroup.es
- * GitHub: https://github.com/tuusuario/quotreminder-whmcs-addon
- * 
  * Licencia: MIT
  */
 
 if (!defined('WHMCS')) { die('Access denied'); }
+
 use WHMCS\Database\Capsule;
 
 /*-----------------------------------------------------------------
@@ -17,8 +16,8 @@ function quotreminder_config() {
     return [
         'name'        => 'Quote Reminder',
         'description' => 'Hasta 7 recordatorios automáticos con PDF adjunto, link y cancelación automática.',
-        'author'      => 'Tu Nombre',
-        'version'     => '2.1',
+        'author'      => 'Digital Media Group',
+        'version'     => '2.2',
         'fields'      => []
     ];
 }
@@ -34,7 +33,7 @@ function quotreminder_activate() {
                 $t->increments('id');
                 $t->tinyInteger('num');
                 $t->integer('days_after');
-                $t->string('template_name', 100);
+                $t->string('template_name', 150);
             });
         }
         // Tabla de log
@@ -47,7 +46,7 @@ function quotreminder_activate() {
             });
         }
         return ['status'=>'success','description'=>'Tablas creadas correctamente.'];
-    } catch(Throwable $e){
+    } catch (Throwable $e) {
         return ['status'=>'error','description'=>$e->getMessage()];
     }
 }
@@ -56,16 +55,20 @@ function quotreminder_activate() {
  DESACTIVAR (borra tablas salvo ?keepdata=1)
 -----------------------------------------------------------------*/
 function quotreminder_deactivate() {
-    if (isset($_REQUEST['keepdata']) && $_REQUEST['keepdata']=='1') {
+    if (isset($_REQUEST['keepdata']) && $_REQUEST['keepdata'] == '1') {
         return ['status'=>'success','description'=>'Datos conservados.'];
     }
-    Capsule::schema()->dropIfExists('whmcsmod_quote_reminder_log');
-    Capsule::schema()->dropIfExists('whmcsmod_quote_reminders');
-    // Borra settings de configuración extra:
-    Capsule::table('tbladdonmodules')->where('module','quotreminder')->whereIn('setting', [
-        'dead_after_days','dead_send_mail','dead_deadtemplate'
-    ])->delete();
-    return ['status'=>'success','description'=>'Tablas eliminadas.'];
+    try {
+        Capsule::schema()->dropIfExists('whmcsmod_quote_reminder_log');
+        Capsule::schema()->dropIfExists('whmcsmod_quote_reminders');
+        // Borra settings extra:
+        Capsule::table('tbladdonmodules')->where('module','quotreminder')->whereIn('setting', [
+            'dead_after_days','dead_send_mail','dead_deadtemplate'
+        ])->delete();
+        return ['status'=>'success','description'=>'Tablas eliminadas.'];
+    } catch (Throwable $e) {
+        return ['status'=>'error','description'=>$e->getMessage()];
+    }
 }
 
 /*-----------------------------------------------------------------
@@ -73,15 +76,17 @@ function quotreminder_deactivate() {
 -----------------------------------------------------------------*/
 function quotreminder_output($vars)
 {
-    // Guardar recordatorios
+    // Guardar recordatorios (1-7)
     if (isset($_POST['save_reminders'])) {
         Capsule::table('whmcsmod_quote_reminders')->truncate();
-        for ($i=1;$i<=7;$i++){
-            $dias = (int)($_POST["days_after_$i"]??0);
-            $tpl  = trim($_POST["template_name_$i"]??'');
-            if ($dias>0 && $tpl!=='') {
+        for ($i=1; $i<=7; $i++){
+            $dias = (int)($_POST["days_after_$i"] ?? 0);
+            $tpl  = trim($_POST["template_name_$i"] ?? '');
+            if ($dias > 0 && $tpl !== '') {
                 Capsule::table('whmcsmod_quote_reminders')->insert([
-                    'num'=>$i,'days_after'=>$dias,'template_name'=>$tpl
+                    'num'           => $i,
+                    'days_after'    => $dias,
+                    'template_name' => $tpl
                 ]);
             }
         }
@@ -94,7 +99,6 @@ function quotreminder_output($vars)
         $dead_send = isset($_POST['dead_send_mail']) ? 1 : 0;
         $dead_tpl  = trim($_POST['dead_deadtemplate'] ?? '');
 
-        $exists = Capsule::table('tbladdonmodules')->where('module','quotreminder');
         // Dead days
         if (Capsule::table('tbladdonmodules')->where('module','quotreminder')->where('setting','dead_after_days')->count()) {
             Capsule::table('tbladdonmodules')->where('module','quotreminder')->where('setting','dead_after_days')->update(['value'=>$dead_days]);
@@ -118,10 +122,16 @@ function quotreminder_output($vars)
     }
 
     // Cargar datos actuales "muerto"
-    $dead_days = (int)Capsule::table('tbladdonmodules')->where('module','quotreminder')->where('setting','dead_after_days')->value('value', 0);
-    $dead_send = (int)Capsule::table('tbladdonmodules')->where('module','quotreminder')->where('setting','dead_send_mail')->value('value', 0);
-    $dead_tpl  = Capsule::table('tbladdonmodules')->where('module','quotreminder')->where('setting','dead_deadtemplate')->value('value', '');
+    $dead_days_raw = Capsule::table('tbladdonmodules')->where('module','quotreminder')->where('setting','dead_after_days')->value('value');
+    $dead_days = is_null($dead_days_raw) ? 0 : (int)$dead_days_raw;
 
+    $dead_send_raw = Capsule::table('tbladdonmodules')->where('module','quotreminder')->where('setting','dead_send_mail')->value('value');
+    $dead_send = is_null($dead_send_raw) ? 0 : (int)$dead_send_raw;
+
+    $dead_tpl = Capsule::table('tbladdonmodules')->where('module','quotreminder')->where('setting','dead_deadtemplate')->value('value');
+    if (!is_string($dead_tpl)) $dead_tpl = '';
+
+    // Datos para desplegables
     $plantillas = Capsule::table('tblemailtemplates')
                  ->where('type','general')
                  ->orderBy('name')->get();
@@ -133,14 +143,14 @@ function quotreminder_output($vars)
       <table class="form" width="100%" cellpadding="4">
         <tr><th>#</th><th>Días después de la creación</th><th>Plantilla de correo</th></tr>';
 
-    for($i=1;$i<=7;$i++){
+    for ($i=1; $i<=7; $i++){
         $d   = $reminders[$i]->days_after     ?? '';
         $tpl = $reminders[$i]->template_name ?? '';
         echo "<tr>
                <td style='text-align:center'>$i</td>
-               <td><input type='number' name='days_after_$i' value='$d' min='1' style='width:80px'></td>
+               <td><input type='number' name='days_after_$i' value='".htmlspecialchars($d)."' min='1' style='width:80px'></td>
                <td><select name='template_name_$i'><option value=''>-- Seleccione --</option>";
-        foreach($plantillas as $p){
+        foreach ($plantillas as $p){
             $sel = ($p->name == $tpl) ? 'selected':'';
             echo "<option value='".htmlspecialchars($p->name)."' $sel>"
                  .htmlspecialchars($p->name)."</option>";
